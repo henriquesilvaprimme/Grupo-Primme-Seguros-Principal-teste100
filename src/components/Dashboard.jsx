@@ -1,14 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCcw } from 'lucide-react'; // Importação do ícone de refresh
+import { RefreshCcw } from 'lucide-react';
 
 // --- CONFIGURAÇÃO CORS / URLs ---
 const ORIGIN_DOMAIN = 'https://grupo-primme-seguros-principal-teste100.onrender.com';
 const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyGelso1gXJEKWBCDScAyVBGPp9ncWsuUjN8XS-Cd7R8xIH7p6PWEZo2eH-WZcs99yNaA/exec';
-// Se você possuir um proxy no seu domínio (recomendado), aponte PROXY_PATH para ele.
-// Ex.: seu servidor deve encaminhar POST/GET /api/gas -> GAS_WEBAPP_URL
 const PROXY_PATH = '/api/gas';
-
-// Usa proxy local quando o front estiver rodando no domínio esperado; caso contrário chama GAS diretamente
 const GAS_BASE_URL =
   (typeof window !== 'undefined' && window.location.origin === ORIGIN_DOMAIN)
     ? PROXY_PATH
@@ -102,7 +98,6 @@ async function fetchJSON(url, options = {}) {
     method: options.method || 'GET',
     headers: options.headers || {},
     body: options.body,
-    // força modo CORS (padrão já é 'cors' para cross-origin)
     mode: 'cors',
     credentials: 'omit',
     cache: options.cache || 'no-store',
@@ -114,7 +109,6 @@ async function fetchJSON(url, options = {}) {
     throw new Error(`HTTP ${res.status} - ${res.statusText} ${text ? '| ' + text : ''}`);
   }
 
-  // tenta parsear JSON, se não for JSON retorna texto
   const txt = await res.text();
   try { return JSON.parse(txt); } catch (e) { return txt; }
 }
@@ -124,7 +118,6 @@ const Dashboard = ({ leads, usuarioLogado }) => {
   const [loading, setLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  // STATES para Total de Renovações
   const [totalRenovacoesMirror, setTotalRenovacoesMirror] = useState(0);
   const [loadingTotalRenovacoes, setLoadingTotalRenovacoes] = useState(false);
   const [isEditingTotalRenovacoes, setIsEditingTotalRenovacoes] = useState(false);
@@ -149,71 +142,74 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     fim: getUltimoDiaMes()
   });
 
-  // Função auxiliar para validar e formatar a data
   const getValidDateStr = (dateValue) => {
     if (!dateValue) return null;
     const dateObj = new Date(dateValue);
-    if (isNaN(dateObj.getTime())) {
-      return null;
-    }
+    if (isNaN(dateObj.getTime())) return null;
     return dateObj.toISOString().slice(0, 10);
   };
 
-  // Busca leads fechados (sem mode: 'no-cors', para poder ler o JSON)
+  // Busca leads fechados
   const buscarLeadsClosedFromAPI = async () => {
     setIsLoading(true);
     setLoading(true);
     try {
-      const dadosLeads = await fetchJSON(`${GAS_BASE_URL}?v=pegar_clientes_fechados`);
-      // caso o GAS retorne string, proteger:
+      const dadosLeads = await fetchJSON(`${GAS_BASE_URL}?v=pegar_clientes_fechados`, { cache: 'no-store' });
       if (Array.isArray(dadosLeads)) setLeadsClosed(dadosLeads);
       else if (typeof dadosLeads === 'string') {
         try { setLeadsClosed(JSON.parse(dadosLeads)); } catch { setLeadsClosed([]); }
       } else setLeadsClosed(dadosLeads || []);
     } catch (error) {
       console.error('Erro ao buscar leads:', error);
-      // mantém estado anterior se falhar
     } finally {
       setIsLoading(false);
       setLoading(false);
     }
   };
 
-  // Buscar valor espelho de Apolices!I2
-  const fetchTotalRenovacoesFromApolices = async () => {
+  // Buscar valor espelho de Apolices!I2 (aceita suffix opcional p/ cache-buster)
+  const fetchTotalRenovacoesFromApolices = async (suffix = '') => {
     setLoadingTotalRenovacoes(true);
     try {
-      const data = await fetchJSON(`${GAS_BASE_URL}?v=pegar_valor_apolice_i2`);
+      const data = await fetchJSON(`${GAS_BASE_URL}?v=pegar_valor_apolice_i2${suffix}`, { cache: 'no-store' });
       const valor = data && (data.valor !== undefined) ? data.valor : 0;
       const num = Number(String(valor).replace(',', '.'));
       setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
     } catch (err) {
       console.error('Erro ao buscar Total de Renovacoes (Apolices!I2):', err);
-      // opcionalmente definir 0 ou manter valor atual
     } finally {
       setLoadingTotalRenovacoes(false);
     }
   };
 
-  // Salvar valor em Apolices!I2 via POST
+  // Salvar valor em Apolices!I2 via POST; utiliza retorno do POST (valorAtual) para atualizar UI
   const saveTotalRenovacoesToApolices = async (valueToSave) => {
     setSavingTotalRenovacoes(true);
     try {
-      const payload = {
-        v: 'setTotalRenovacoes',
-        totalRenovacoes: valueToSave
-      };
-
-      await fetchJSON(GAS_BASE_URL, {
+      const payload = { v: 'setTotalRenovacoes', totalRenovacoes: valueToSave };
+      const resp = await fetch(GAS_BASE_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        mode: 'cors',
+        cache: 'no-store',
+        credentials: 'omit'
       });
 
-      // Recarrega o valor da planilha (garante que lemos o que foi salvo)
-      await fetchTotalRenovacoesFromApolices();
+      if (!resp.ok) throw new Error(`Erro ao salvar (status ${resp.status})`);
+
+      let postResult = null;
+      try { postResult = await resp.json(); } catch (e) { postResult = null; }
+
+      if (postResult && (postResult.valorAtual !== undefined || postResult.totalRenovacoes !== undefined)) {
+        // usa valor retornado pelo GAS (prefere valorAtual se existir)
+        const returned = postResult.valorAtual !== undefined ? postResult.valorAtual : postResult.totalRenovacoes;
+        const num = Number(String(returned).replace(',', '.'));
+        setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
+      } else {
+        // fallback: força GET com cache-buster
+        await fetchTotalRenovacoesFromApolices(`&_ts=${Date.now()}`);
+      }
 
       setIsEditingTotalRenovacoes(false);
     } catch (err) {
@@ -230,11 +226,8 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const aplicarFiltroData = () => {
-    setFiltroAplicado({ inicio: dataInicio, fim: dataFim });
-  };
+  const aplicarFiltroData = () => setFiltroAplicado({ inicio: dataInicio, fim: dataFim });
 
-  // Filtro por data dos leads gerais (vindos via prop `leads`)
   const leadsFiltradosPorDataGeral = leads.filter((lead) => {
     if (lead.status === 'Cancelado') return false;
     const dataLeadStr = getValidDateStr(lead.createdAt);
@@ -247,7 +240,6 @@ const Dashboard = ({ leads, usuarioLogado }) => {
   const totalLeads = leadsFiltradosPorDataGeral.length;
   const leadsPerdidos = leadsFiltradosPorDataGeral.filter((lead) => lead.status === 'Perdido').length;
 
-  // Filtra leads fechados por responsável e data
   let leadsFiltradosClosed =
     usuarioLogado.tipo === 'Admin'
       ? leadsClosed
@@ -261,7 +253,6 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     return true;
   });
 
-  // Contadores por seguradora
   const portoSeguro = leadsFiltradosClosed.filter((lead) => lead.Seguradora === 'Porto Seguro').length;
   const azulSeguros = leadsFiltradosClosed.filter((lead) => lead.Seguradora === 'Azul Seguros').length;
   const itauSeguros = leadsFiltradosClosed.filter((lead) => lead.Seguradora === 'Itau Seguros').length;
@@ -290,42 +281,12 @@ const Dashboard = ({ leads, usuarioLogado }) => {
       <h1 style={{ color: '#1f2937', marginBottom: '20px', fontWeight: '700' }}>Dashboard de Vendas</h1>
 
       {/* Filtro de datas e Botão de Refresh */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '30px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <input
-          type="date"
-          value={dataInicio}
-          onChange={(e) => setDataInicio(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #d1d5db' }}
-          title="Data de Início"
-        />
-        <input
-          type="date"
-          value={dataFim}
-          onChange={(e) => setDataFim(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #d1d5db' }}
-          title="Data de Fim"
-        />
-        <button
-          onClick={aplicarFiltroData}
-          style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}
-        >
-          Filtrar
-        </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '30px', flexWrap: 'wrap' }}>
+        <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #d1d5db' }} title="Data de Início" />
+        <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #d1d5db' }} title="Data de Fim" />
+        <button onClick={aplicarFiltroData} style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>Filtrar</button>
 
-        <button
-          title='Clique para atualizar os dados'
-          onClick={() => { buscarLeadsClosedFromAPI(); fetchTotalRenovacoesFromApolices(); }}
-          disabled={isLoading}
-          style={{ backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: '40px', height: '40px' }}
-        >
+        <button title='Clique para atualizar os dados' onClick={() => { buscarLeadsClosedFromAPI(); fetchTotalRenovacoesFromApolices(`&_ts=${Date.now()}`); }} disabled={isLoading} style={{ backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: '40px', height: '40px' }}>
           {isLoading ? (
             <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -345,98 +306,47 @@ const Dashboard = ({ leads, usuarioLogado }) => {
 
       {!loading && (
         <>
-          {/* Primeira Seção */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '20px',
-            marginBottom: '30px',
-          }}>
-            {/* Total de Renovações (editável) */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '30px' }}>
             <div style={{ ...compactCardStyle, minWidth: '150px' }}>
               <p style={titleTextStyle}>Total de Renovações</p>
 
               {isEditingTotalRenovacoes ? (
                 <>
-                  <input
-                    type="text"
-                    value={totalRenovacoesInput}
-                    onChange={(e) => setTotalRenovacoesInput(e.target.value)}
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #d1d5db', width: '100%', textAlign: 'center', fontSize: '20px', fontWeight: '700' }}
-                    disabled={savingTotalRenovacoes}
-                  />
+                  <input type="text" value={totalRenovacoesInput} onChange={(e) => setTotalRenovacoesInput(e.target.value)} style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #d1d5db', width: '100%', textAlign: 'center', fontSize: '20px', fontWeight: '700' }} disabled={savingTotalRenovacoes} />
                   <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={() => saveTotalRenovacoesToApolices(totalRenovacoesInput)}
-                      disabled={savingTotalRenovacoes}
-                      style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}
-                    >
-                      {savingTotalRenovacoes ? 'Salvando...' : 'Salvar'}
-                    </button>
-                    <button
-                      onClick={() => { setIsEditingTotalRenovacoes(false); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }}
-                      disabled={savingTotalRenovacoes}
-                      style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}
-                    >
-                      Cancelar
-                    </button>
+                    <button onClick={() => saveTotalRenovacoesToApolices(totalRenovacoesInput)} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>{savingTotalRenovacoes ? 'Salvando...' : 'Salvar'}</button>
+                    <button onClick={() => { setIsEditingTotalRenovacoes(false); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Cancelar</button>
                   </div>
                 </>
               ) : (
                 <>
-                  <p style={{ ...valueTextStyle, color: '#1f2937' }}>
-                    {loadingTotalRenovacoes ? '...' : totalRenovacoesMirror}
-                  </p>
+                  <p style={{ ...valueTextStyle, color: '#1f2937' }}>{loadingTotalRenovacoes ? '...' : totalRenovacoesMirror}</p>
                   <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={() => { setIsEditingTotalRenovacoes(true); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }}
-                      style={{ backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      onClick={fetchTotalRenovacoesFromApolices}
-                      style={{ backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}
-                    >
-                      Atualizar
-                    </button>
+                    <button onClick={() => { setIsEditingTotalRenovacoes(true); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }} style={{ backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Editar</button>
+                    <button onClick={() => fetchTotalRenovacoesFromApolices(`&_ts=${Date.now()}`)} style={{ backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Atualizar</button>
                   </div>
                 </>
               )}
             </div>
 
-            {/* Renovações */}
             <div style={{ ...compactCardStyle, backgroundColor: '#d1fae5', border: '1px solid #a7f3d0' }}>
               <p style={{ ...titleTextStyle, color: '#059669' }}>Renovados</p>
               <p style={{ ...valueTextStyle, color: '#059669' }}>{leadsFechadosCount}</p>
             </div>
 
-            {/* Perdidos */}
             <div style={{ ...compactCardStyle, backgroundColor: '#fee2e2', border: '1px solid #fca5a5' }}>
               <p style={{ ...titleTextStyle, color: '#ef4444' }}>Perdidos</p>
               <p style={{ ...valueTextStyle, color: '#ef4444' }}>{leadsPerdidos}</p>
             </div>
 
-            {/* Gráfico */}
-            <div style={{
-              ...compactCardStyle,
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: '150px'
-            }}>
+            <div style={{ ...compactCardStyle, alignItems: 'center', justifyContent: 'center', minWidth: '150px' }}>
               <h3 style={{ ...titleTextStyle, color: '#1f2937', marginBottom: '5px' }}>Taxa de Renovação</h3>
               <CircularProgressChart percentage={porcentagemVendidos} />
             </div>
           </div>
 
-          {/* Seção: Seguradoras */}
           <h2 style={{ color: '#1f2937', marginBottom: '15px', fontSize: '18px', fontWeight: '600' }}>Vendas por Seguradora</h2>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '20px',
-            marginBottom: '30px',
-          }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '30px' }}>
             <div style={{ ...compactCardStyle, backgroundColor: '#f0f9ff', border: '1px solid #bfdbfe' }}>
               <p style={{ ...titleTextStyle, color: '#1e40af' }}>Porto Seguro</p>
               <p style={{ ...valueTextStyle, color: '#1e40af' }}>{portoSeguro}</p>
@@ -455,29 +365,19 @@ const Dashboard = ({ leads, usuarioLogado }) => {
             </div>
           </div>
 
-          {/* Métricas Financeiras (Admin) */}
           {usuarioLogado.tipo === 'Admin' && (
             <>
               <h2 style={{ color: '#1f2937', marginBottom: '15px', fontSize: '18px', fontWeight: '600' }}>Métricas Financeiras</h2>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: '20px',
-              }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
                 <div style={{ ...compactCardStyle, backgroundColor: '#eef2ff', border: '1px solid #c7d2fe' }}>
                   <p style={{ ...titleTextStyle, color: '#4f46e5' }}>Total Prêmio Líquido</p>
                   <p style={{ ...valueTextStyle, color: '#4f46e5' }}>
-                    {totalPremioLiquido.toLocaleString('pt-BR', {
-                      style: 'currency',
-                      currency: 'BRL',
-                    })}
+                    {totalPremioLiquido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </p>
                 </div>
                 <div style={{ ...compactCardStyle, backgroundColor: '#ecfeff', border: '1px solid #99f6e4' }}>
                   <p style={{ ...titleTextStyle, color: '#0f766e' }}>Média Comissão</p>
-                  <p style={{ ...valueTextStyle, color: '#0f766e' }}>
-                    {comissaoMediaGlobal.toFixed(2).replace('.', ',')}%
-                  </p>
+                  <p style={{ ...valueTextStyle, color: '#0f766e' }}>{comissaoMediaGlobal.toFixed(2).replace('.', ',')}%</p>
                 </div>
               </div>
             </>
