@@ -323,7 +323,8 @@ const Dashboard = ({ leads, usuarioLogado }) => {
   const comissaoMediaGlobal =
     totalPremioLiquido > 0 ? (somaPonderadaComissao / totalPremioLiquido) * 100 : 0;
 
-  const porcentagemVendidos = totalLeads > 0 ? (leadsFechadosCount / totalLeads) * 100 : 0;
+  // Alterado: agora a "Taxa de Renovação" é calculada como Renovados / TotalRenovacoes * 100
+  const porcentagemVendidos = totalRenovacoesMirror > 0 ? (leadsFechadosCount / totalRenovacoesMirror) * 100 : 0;
 
   return (
     <div style={{ padding: '20px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
