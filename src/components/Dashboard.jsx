@@ -103,14 +103,37 @@ async function fetchJSON(url, options = {}) {
     cache: options.cache || 'no-store',
   };
 
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status} - ${res.statusText} ${text ? '| ' + text : ''}`);
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (fetchErr) {
+    // Erro de rede (CORS, DNS, etc)
+    throw new Error(`Fetch falhou: ${fetchErr.message || fetchErr}`);
   }
 
-  const txt = await res.text();
-  try { return JSON.parse(txt); } catch (e) { return txt; }
+  const txt = await res.text().catch(() => '');
+
+  if (!res.ok) {
+    // inclui o corpo do erro no message para debugging
+    throw new Error(`HTTP ${res.status} - ${res.statusText}${txt ? ' | ' + txt : ''}`);
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    try {
+      return JSON.parse(txt);
+    } catch (e) {
+      console.warn('fetchJSON: content-type application/json mas JSON inválido:', txt);
+      return txt;
+    }
+  }
+
+  // Se não for JSON, tenta parsear (caso o body seja JSON mas header errado) e senão retorna texto
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    return txt;
+  }
 }
 
 const Dashboard = ({ leads, usuarioLogado }) => {
@@ -172,11 +195,19 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     setLoadingTotalRenovacoes(true);
     try {
       const data = await fetchJSON(`${GAS_BASE_URL}?v=pegar_valor_apolice_i2${suffix}`, { cache: 'no-store' });
-      const valor = data && (data.valor !== undefined) ? data.valor : 0;
-      const num = Number(String(valor).replace(',', '.'));
-      setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
+
+      // Se veio string (erro do GAS), log detalhado e fallback
+      if (typeof data === 'string') {
+        console.error('Resposta do GAS (texto) ao buscar Total de Renovacoes:', data);
+        setTotalRenovacoesMirror(0);
+      } else {
+        const valor = data && (data.valor !== undefined) ? data.valor : 0;
+        const num = Number(String(valor).replace(',', '.'));
+        setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
+      }
     } catch (err) {
       console.error('Erro ao buscar Total de Renovacoes (Apolices!I2):', err);
+      setTotalRenovacoesMirror(0);
     } finally {
       setLoadingTotalRenovacoes(false);
     }
@@ -196,10 +227,21 @@ const Dashboard = ({ leads, usuarioLogado }) => {
         credentials: 'omit'
       });
 
-      if (!resp.ok) throw new Error(`Erro ao salvar (status ${resp.status})`);
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Erro ao salvar (status ${resp.status})${errText ? ' | ' + errText : ''}`);
+      }
 
+      const text = await resp.text().catch(() => '');
       let postResult = null;
-      try { postResult = await resp.json(); } catch (e) { postResult = null; }
+      if (text) {
+        try {
+          postResult = JSON.parse(text);
+        } catch (e) {
+          console.warn('Resposta do POST (salvar) não é JSON:', text);
+          postResult = null;
+        }
+      }
 
       if (postResult && (postResult.valorAtual !== undefined || postResult.totalRenovacoes !== undefined)) {
         // usa valor retornado pelo GAS (prefere valorAtual se existir)
