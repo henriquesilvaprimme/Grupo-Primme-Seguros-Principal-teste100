@@ -29,13 +29,14 @@ function ScrollToTop({ scrollContainerRef }) {
   return null;
 }
 
-// URLs do Google Apps Script
+// URLs do Google Apps Script (proxy /api/gas)
 const GOOGLE_APPS_SCRIPT_BASE_URL = '/api/gas';
 const GOOGLE_SHEETS_SCRIPT_URL = `${GOOGLE_APPS_SCRIPT_BASE_URL}?v=getLeads`;
 const GOOGLE_SHEETS_RENOVADOS = `${GOOGLE_APPS_SCRIPT_BASE_URL}?v=pegar_clientes_fechados`;
 const GOOGLE_SHEETS_USERS_AUTH_URL = `${GOOGLE_APPS_SCRIPT_BASE_URL}?v=pegar_usuario`;
 const SALVAR_AGENDAMENTO_SCRIPT_URL = `${GOOGLE_APPS_SCRIPT_BASE_URL}?action=salvarAgendamento`;
 const SALVAR_OBSERVACAO_SCRIPT_URL = `${GOOGLE_APPS_SCRIPT_BASE_URL}`;
+const GOOGLE_SHEETS_TOTAL_RENOVACOES = `${GOOGLE_APPS_SCRIPT_BASE_URL}?v=getTotalRenovacoes`;
 
 function App() {
   const navigate = useNavigate();
@@ -62,9 +63,31 @@ function App() {
     img.onload = () => setBackgroundLoaded(true);
   }, []);
 
+  // BUSCA TOTAL DE RENOVAÇÕES (Apolices!I2)
+  const fetchTotalRenovacoes = async () => {
+    try {
+      const response = await fetch(GOOGLE_SHEETS_TOTAL_RENOVACOES, { cache: 'no-cache' });
+      if (!response.ok) {
+        console.warn('fetchTotalRenovacoes: resposta não OK', response.status);
+        return;
+      }
+      const data = await response.json();
+      // Pode vir { totalRenovacoes: "123" } ou { total: 123 } ou direto "123"
+      const valor = Number(data?.totalRenovacoes ?? data?.total ?? data);
+      if (!isNaN(valor)) {
+        setLeadsCount(valor);
+      } else {
+        console.warn('fetchTotalRenovacoes: formato inesperado', data);
+      }
+    } catch (error) {
+      console.error('Erro ao buscar total de renovações:', error);
+    }
+  };
+
   const fetchUsuariosForLogin = async () => {
     try {
-      const response = await fetch(GOOGLE_SHEETS_USERS_AUTH_URL);
+      const response = await fetch(GOOGLE_SHEETS_USERS_AUTH_URL, { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`Status ${response.status}`);
       const data = await response.json();
 
       if (Array.isArray(data)) {
@@ -133,7 +156,12 @@ function App() {
   const fetchRenovacoesFromSheet = async (sheetName = 'Renovações') => {
     const url = `${GOOGLE_APPS_SCRIPT_BASE_URL}?v=getLeads&sheet=${sheetName}`;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { cache: 'no-cache' });
+      if (!response.ok) {
+        console.warn('fetchRenovacoesFromSheet: resposta não OK', response.status);
+        if (!leadSelecionado) setRenovacoes([]);
+        return;
+      }
       const data = await response.json();
 
       if (Array.isArray(data)) {
@@ -164,7 +192,6 @@ function App() {
           agendados: item.agendados || '',
           MeioPagamento: item.MeioPagamento || '',
           CartaoPortoNovo: item.CartaoPortoNovo || '',
-          // ✅ NOVOS CAMPOS PARA ENDOSSO
           Endossado: item.Endossado === 'TRUE' || item.Endossado === true || item.Endossado === 'true',
           NumeroParcelas: item.NumeroParcelas || '',
         }));
@@ -177,6 +204,8 @@ function App() {
           setRenovacoes([]);
         }
       }
+      // atualizar total também após uma leitura bem sucedida
+      fetchTotalRenovacoes();
     } catch (error) {
       console.error('Erro ao buscar renovações da planilha:', error);
       if (!leadSelecionado) {
@@ -188,8 +217,10 @@ function App() {
   useEffect(() => {
     if (!isEditing) {
       fetchRenovacoesFromSheet('Renovações');  
+      fetchTotalRenovacoes();
       const interval = setInterval(() => {
         fetchRenovacoesFromSheet('Renovações');  
+        fetchTotalRenovacoes();
       }, 300000);
       return () => clearInterval(interval);
     }
@@ -197,7 +228,12 @@ function App() {
 
   const fetchRenovadosFromSheet = async () => {
     try {
-      const response = await fetch(GOOGLE_SHEETS_RENOVADOS);
+      const response = await fetch(GOOGLE_SHEETS_RENOVADOS, { cache: 'no-cache' });
+      if (!response.ok) {
+        console.warn('fetchRenovadosFromSheet: resposta não OK', response.status);
+        setRenovados([]);
+        return;
+      }
       const data = await response.json();
 
       const formattedData = (Array.isArray(data) ? data : []).map(item => ({
@@ -205,12 +241,12 @@ function App() {
         insuranceType: item.insuranceType || '',
         MeioPagamento: item.MeioPagamento || '',
         CartaoPortoNovo: item.CartaoPortoNovo || '',
-        // ✅ NOVOS CAMPOS PARA ENDOSSO
         Endossado: item.Endossado === 'TRUE' || item.Endossado === true || item.Endossado === 'true',
         NumeroParcelas: item.NumeroParcelas || '',
       }));
       setRenovados(formattedData);
-
+      // atualizar total após ler renovados (caso necessário)
+      fetchTotalRenovacoes();
     } catch (error) {
       console.error('Erro ao buscar renovados:', error);
       setRenovados([]);
@@ -285,7 +321,6 @@ function App() {
               observacao: leadParaAdicionar.observacao || '',
               MeioPagamento: leadParaAdicionar.MeioPagamento || '',
               CartaoPortoNovo: leadParaAdicionar.CartaoPortoNovo || '',
-              // ✅ NOVOS CAMPOS PARA ENDOSSO
               Endossado: leadParaAdicionar.Endossado || false,
               NumeroParcelas: leadParaAdicionar.NumeroParcelas || '',
             };
@@ -300,7 +335,7 @@ function App() {
     
   const handleConfirmAgendamento = async (leadId, dataAgendada) => {
     try {
-      await fetch(SALVAR_AGENDAMENTO_SCRIPT_URL, {
+      const response = await fetch(SALVAR_AGENDAMENTO_SCRIPT_URL, {
         method: 'POST',
         body: JSON.stringify({
           leadId: leadId,
@@ -311,8 +346,23 @@ function App() {
         },
       });
 
-      await fetchRenovacoesFromSheet();
-      
+      if (response.ok) {
+        // Se o GAS retornar JSON com totalRenovacoes, usa; caso contrário, refaz a leitura
+        try {
+          const json = await response.json();
+          if (json?.totalRenovacoes) {
+            setLeadsCount(Number(json.totalRenovacoes));
+          } else {
+            await fetchRenovacoesFromSheet();
+            await fetchTotalRenovacoes();
+          }
+        } catch (e) {
+          await fetchRenovacoesFromSheet();
+          await fetchTotalRenovacoes();
+        }
+      } else {
+        console.error('Erro ao salvar agendamento:', response.statusText);
+      }
     } catch (error) {
       console.error('Erro ao confirmar agendamento:', error);
     }
@@ -336,7 +386,7 @@ function App() {
     VigenciaInicial: "",
   });
 
-  const confirmarSeguradoraRenovado = (id, premio, seguradora, comissao, parcelamento, vigenciaFinal, vigenciaInicial, meioPagamento, cartaoPortoNovo) => {
+  const confirmarSeguradoraRenovado = async (id, premio, seguradora, comissao, parcelamento, vigenciaFinal, vigenciaInicial, meioPagamento, cartaoPortoNovo) => {
     const renovado = renovados.find((lead) => lead.ID == id);
 
     if (!renovado) {
@@ -344,6 +394,7 @@ function App() {
       return;
     }
 
+    // atualiza localmente antes de enviar
     renovado.Seguradora = seguradora;
     renovado.PremioLiquido = premio;
     renovado.Comissao = comissao;
@@ -372,7 +423,7 @@ function App() {
     });
 
     try {
-      fetch(GOOGLE_APPS_SCRIPT_BASE_URL, {
+      const response = await fetch(GOOGLE_APPS_SCRIPT_BASE_URL, {
         method: 'POST',
         body: JSON.stringify({
           v: 'alterar_seguradora',
@@ -381,18 +432,32 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-      })
-      .then(response => {
-        console.log('Requisição de dados da seguradora enviada (com no-cors).');
-        setTimeout(() => {
-          fetchRenovadosFromSheet();
-        }, 1000);
-      })
-      .catch(error => {
-        console.error('Erro ao enviar renovado (rede ou CORS):', error);
       });
+
+      if (response.ok) {
+        // Tenta extrair total retornado pelo GAS; se não houver, refaz leitura explícita
+        try {
+          const json = await response.json();
+          if (json?.totalRenovacoes) {
+            setLeadsCount(Number(json.totalRenovacoes));
+          } else {
+            // aguarda leitura atualizada
+            setTimeout(() => {
+              fetchRenovadosFromSheet();
+              fetchTotalRenovacoes();
+            }, 800);
+          }
+        } catch (e) {
+          setTimeout(() => {
+            fetchRenovadosFromSheet();
+            fetchTotalRenovacoes();
+          }, 800);
+        }
+      } else {
+        console.error('Erro ao enviar renovado (status):', response.status);
+      }
     } catch (error) {
-      console.error('Erro no bloco try/catch de envio do renovado:', error);
+      console.error('Erro ao enviar renovado (rede ou CORS):', error);
     }
   };
 
@@ -465,8 +530,19 @@ function App() {
       });
     
       if (response.ok) {
-        console.log('Observação salva com sucesso!');
-        fetchRenovacoesFromSheet();
+        // Se o GAS retornar total atualizado, utiliza; senão, refaz leitura
+        try {
+          const json = await response.json();
+          if (json?.totalRenovacoes) {
+            setLeadsCount(Number(json.totalRenovacoes));
+          } else {
+            await fetchRenovacoesFromSheet();
+            await fetchTotalRenovacoes();
+          }
+        } catch (e) {
+          await fetchRenovacoesFromSheet();
+          await fetchTotalRenovacoes();
+        }
       } else {
         console.error('Erro ao salvar observação:', response.statusText);
       }
@@ -550,6 +626,8 @@ function App() {
                 }
                 usuarioLogado={usuarioLogado}
                 setIsEditing={setIsEditing}
+                totalRenovacoes={leadsCount}
+                fetchTotalRenovacoes={fetchTotalRenovacoes}
               />
             }
           />
