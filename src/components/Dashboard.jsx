@@ -146,6 +146,7 @@ const Dashboard = ({ leads, usuarioLogado }) => {
   const [isEditingTotalRenovacoes, setIsEditingTotalRenovacoes] = useState(false);
   const [totalRenovacoesInput, setTotalRenovacoesInput] = useState('');
   const [savingTotalRenovacoes, setSavingTotalRenovacoes] = useState(false);
+  const [isTotalRenovacoesSaved, setIsTotalRenovacoesSaved] = useState(false);
 
   const getPrimeiroDiaMes = () => {
     const hoje = new Date();
@@ -200,14 +201,18 @@ const Dashboard = ({ leads, usuarioLogado }) => {
       if (typeof data === 'string') {
         console.error('Resposta do GAS (texto) ao buscar Total de Renovacoes:', data);
         setTotalRenovacoesMirror(0);
+        setIsTotalRenovacoesSaved(false);
       } else {
         const valor = data && (data.valor !== undefined) ? data.valor : 0;
         const num = Number(String(valor).replace(',', '.'));
-        setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
+        const final = !isNaN(num) ? Math.floor(num) : 0;
+        setTotalRenovacoesMirror(final);
+        setIsTotalRenovacoesSaved(true);
       }
     } catch (err) {
       console.error('Erro ao buscar Total de Renovacoes (Apolices!I2):', err);
       setTotalRenovacoesMirror(0);
+      setIsTotalRenovacoesSaved(false);
     } finally {
       setLoadingTotalRenovacoes(false);
     }
@@ -254,9 +259,11 @@ const Dashboard = ({ leads, usuarioLogado }) => {
       }
 
       setIsEditingTotalRenovacoes(false);
+      setIsTotalRenovacoesSaved(true);
     } catch (err) {
       console.error('Erro ao salvar Total de Renovacoes em Apolices!I2:', err);
       alert('Erro ao salvar. Verifique o console e as permissões do GAS / configurações do proxy.');
+      setIsTotalRenovacoesSaved(false);
     } finally {
       setSavingTotalRenovacoes(false);
     }
@@ -356,16 +363,17 @@ const Dashboard = ({ leads, usuarioLogado }) => {
                 <>
                   <input type="text" value={totalRenovacoesInput} onChange={(e) => setTotalRenovacoesInput(e.target.value)} style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #d1d5db', width: '100%', textAlign: 'center', fontSize: '20px', fontWeight: '700' }} disabled={savingTotalRenovacoes} />
                   <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-                    <button onClick={() => saveTotalRenovacoesToApolices(totalRenovacoesInput)} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>{savingTotalRenovacoes ? 'Salvando...' : 'Salvar'}</button>
-                    <button onClick={() => { setIsEditingTotalRenovacoes(false); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Cancelar</button>
+                    <button onClick={() => saveTotalRenovacoesToApolices(totalRenovacoesInput)} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#86efac', color: '#064e3b', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>{savingTotalRenovacoes ? 'Salvando...' : 'Salvar'}</button>
+                    <button onClick={() => { setIsEditingTotalRenovacoes(false); setTotalRenovacoesInput(String(totalRenovacoesMirror)); setIsTotalRenovacoesSaved(true); }} disabled={savingTotalRenovacoes} style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Cancelar</button>
                   </div>
                 </>
               ) : (
                 <>
                   <p style={{ ...valueTextStyle, color: '#1f2937' }}>{loadingTotalRenovacoes ? '...' : totalRenovacoesMirror}</p>
                   <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-                    <button onClick={() => { setIsEditingTotalRenovacoes(true); setTotalRenovacoesInput(String(totalRenovacoesMirror)); }} style={{ backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Editar</button>
-                    <button onClick={() => fetchTotalRenovacoesFromApolices(`&_ts=${Date.now()}`)} style={{ backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Atualizar</button>
+                    {isTotalRenovacoesSaved && (
+                      <button onClick={() => { setIsEditingTotalRenovacoes(true); setTotalRenovacoesInput(String(totalRenovacoesMirror)); setIsTotalRenovacoesSaved(false); }} style={{ backgroundColor: '#fbbf24', color: '#1f2937', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', fontWeight: '600' }}>Alterar</button>
+                    )}
                   </div>
                 </>
               )}
