@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCcw } from 'lucide-react'; // Importação do ícone de refresh
 
+// --- CONFIGURAÇÃO CORS / URLs ---
+const ORIGIN_DOMAIN = 'https://grupo-primme-seguros-principal-teste100.onrender.com';
+const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyGelso1gXJEKWBCDScAyVBGPp9ncWsuUjN8XS-Cd7R8xIH7p6PWEZo2eH-WZcs99yNaA/exec';
+// Se você possuir um proxy no seu domínio (recomendado), aponte PROXY_PATH para ele.
+// Ex.: seu servidor deve encaminhar POST/GET /api/gas -> GAS_WEBAPP_URL
+const PROXY_PATH = '/api/gas';
+
+// Usa proxy local quando o front estiver rodando no domínio esperado; caso contrário chama GAS diretamente
+const GAS_BASE_URL =
+  (typeof window !== 'undefined' && window.location.origin === ORIGIN_DOMAIN)
+    ? PROXY_PATH
+    : GAS_WEBAPP_URL;
+
 // --- ESTILOS ---
 const compactCardStyle = {
   backgroundColor: '#ffffff',
@@ -83,8 +96,28 @@ const CircularProgressChart = ({ percentage }) => {
   );
 };
 
-// URL base do seu GAS
-const GAS_BASE_URL = 'https://script.google.com/macros/s/AKfycbyGelso1gXJEKWBCDScAyVBGPp9ncWsuUjN8XS-Cd7R8xIH7p6PWEZo2eH-WZcs99yNaA/exec';
+// --- HELPERS DE FETCH (tratamento comum, modo CORS) ---
+async function fetchJSON(url, options = {}) {
+  const opts = {
+    method: options.method || 'GET',
+    headers: options.headers || {},
+    body: options.body,
+    // força modo CORS (padrão já é 'cors' para cross-origin)
+    mode: 'cors',
+    credentials: 'omit',
+    cache: options.cache || 'no-store',
+  };
+
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} - ${res.statusText} ${text ? '| ' + text : ''}`);
+  }
+
+  // tenta parsear JSON, se não for JSON retorna texto
+  const txt = await res.text();
+  try { return JSON.parse(txt); } catch (e) { return txt; }
+}
 
 const Dashboard = ({ leads, usuarioLogado }) => {
   const [leadsClosed, setLeadsClosed] = useState([]);
@@ -131,12 +164,12 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     setIsLoading(true);
     setLoading(true);
     try {
-      const respostaLeads = await fetch(`${GAS_BASE_URL}?v=pegar_clientes_fechados`);
-      if (!respostaLeads.ok) {
-        throw new Error(`Erro ao buscar leads: ${respostaLeads.status}`);
-      }
-      const dadosLeads = await respostaLeads.json();
-      setLeadsClosed(dadosLeads);
+      const dadosLeads = await fetchJSON(`${GAS_BASE_URL}?v=pegar_clientes_fechados`);
+      // caso o GAS retorne string, proteger:
+      if (Array.isArray(dadosLeads)) setLeadsClosed(dadosLeads);
+      else if (typeof dadosLeads === 'string') {
+        try { setLeadsClosed(JSON.parse(dadosLeads)); } catch { setLeadsClosed([]); }
+      } else setLeadsClosed(dadosLeads || []);
     } catch (error) {
       console.error('Erro ao buscar leads:', error);
       // mantém estado anterior se falhar
@@ -146,28 +179,23 @@ const Dashboard = ({ leads, usuarioLogado }) => {
     }
   };
 
-  // Buscar valor espelho de Apolices!I2 (SEM no-cors para poder ler o retorno)
+  // Buscar valor espelho de Apolices!I2
   const fetchTotalRenovacoesFromApolices = async () => {
     setLoadingTotalRenovacoes(true);
     try {
-      const res = await fetch(`${GAS_BASE_URL}?v=pegar_valor_apolice_i2`);
-      if (!res.ok) {
-        throw new Error(`Erro na leitura de Apolices!I2: ${res.status}`);
-      }
-      const data = await res.json();
+      const data = await fetchJSON(`${GAS_BASE_URL}?v=pegar_valor_apolice_i2`);
       const valor = data && (data.valor !== undefined) ? data.valor : 0;
       const num = Number(String(valor).replace(',', '.'));
       setTotalRenovacoesMirror(!isNaN(num) ? Math.floor(num) : 0);
     } catch (err) {
       console.error('Erro ao buscar Total de Renovacoes (Apolices!I2):', err);
       // opcionalmente definir 0 ou manter valor atual
-      // setTotalRenovacoesMirror(0);
     } finally {
       setLoadingTotalRenovacoes(false);
     }
   };
 
-  // Salvar valor em Apolices!I2 via POST (SEM no-cors)
+  // Salvar valor em Apolices!I2 via POST
   const saveTotalRenovacoesToApolices = async (valueToSave) => {
     setSavingTotalRenovacoes(true);
     try {
@@ -176,7 +204,7 @@ const Dashboard = ({ leads, usuarioLogado }) => {
         totalRenovacoes: valueToSave
       };
 
-      const resp = await fetch(GAS_BASE_URL, {
+      await fetchJSON(GAS_BASE_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -184,26 +212,13 @@ const Dashboard = ({ leads, usuarioLogado }) => {
         body: JSON.stringify(payload)
       });
 
-      if (!resp.ok) {
-        throw new Error(`Erro ao salvar (status ${resp.status})`);
-      }
-
-      // Se o GAS retornar um JSON com confirmação, podemos ler:
-      try {
-        const result = await resp.json();
-        // Se quiser, podemos validar result aqui (ex.: result.success)
-      } catch (e) {
-        // caso o GAS não retorne body, ignore e prosseguir (mas normalmente retornará)
-      }
-
       // Recarrega o valor da planilha (garante que lemos o que foi salvo)
       await fetchTotalRenovacoesFromApolices();
 
       setIsEditingTotalRenovacoes(false);
     } catch (err) {
       console.error('Erro ao salvar Total de Renovacoes em Apolices!I2:', err);
-      // Mantém em edição para o usuário tentar novamente
-      alert('Erro ao salvar. Verifique o console e as permissões do GAS.');
+      alert('Erro ao salvar. Verifique o console e as permissões do GAS / configurações do proxy.');
     } finally {
       setSavingTotalRenovacoes(false);
     }
@@ -212,6 +227,7 @@ const Dashboard = ({ leads, usuarioLogado }) => {
   useEffect(() => {
     buscarLeadsClosedFromAPI();
     fetchTotalRenovacoesFromApolices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const aplicarFiltroData = () => {
